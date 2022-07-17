@@ -1,9 +1,13 @@
-using System.Net.Mime;
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using DG.Tweening;
 using UnityEngine;
+using Debug = UnityEngine.Debug;
+using Random = UnityEngine.Random;
+
 
 namespace Match3
 {
@@ -21,6 +25,20 @@ namespace Match3
         private readonly List<Tile> _selection = new List<Tile>();
 
         private const float tweenDuration = 0.25f;
+
+        private bool _isSwapping = false;
+        private bool isSwapping {
+            get => _isSwapping;
+
+            set
+            {
+                _isSwapping = value;
+
+                if(_isSwapping) AudioManager.Instance.PlayOneShot(AudioManager.Instance.swapSound);//Plays the swap sound
+            }    
+        }
+
+
 
         private void Awake()
         {
@@ -49,6 +67,8 @@ namespace Match3
                     Tiles[x, y] = tile;
                 }
             }
+
+            Pop();//to avoid initialize with matchs
         }
 
         /// <summary>
@@ -58,14 +78,36 @@ namespace Match3
         /// <returns></returns>
         public async void Select(Tile tile)
         {
+            if(isSwapping) return; //Avoid to allow player to select another tile while a swapping is running
+
             if(!_selection.Contains(tile))
-                _selection.Add(tile);
+            {
+                Debug.Log($"Is Swapping: {isSwapping}");
+                //Check if its a valid selection to move
+                if(_selection.Count > 0)
+                {
+                    if(Array.IndexOf(_selection[0].Neighbours, tile) != -1) AddElementeToSelectionList(tile);
+                }
+                else
+                    AddElementeToSelectionList(tile);
+
+            }
+
 
             if(_selection.Count < 2) return;
 
             Debug.Log($"Selected tiles at ({_selection[0].x}, {_selection[0].y}) and ({_selection[1].x}, {_selection[1].y})");
 
+            isSwapping = true;
+
             await Swap(_selection[0], _selection[1]);
+
+            if(CanPop())
+                Pop();
+            else
+                await Swap(_selection[0], _selection[1]);
+
+            // isSwapping = false;
 
             _selection.Clear();
         }
@@ -78,6 +120,8 @@ namespace Match3
         /// <returns></returns>
         public async Task Swap(Tile tile1, Tile tile2)
         {
+            isSwapping = true;
+
             var icon1 = tile1.icon;
             var icon2 = tile2.icon;
 
@@ -101,6 +145,67 @@ namespace Match3
 
             tile1.item = tile2.item;
             tile2.item = tempTile1Item;
+
+            isSwapping = false;
+        }
+
+        private bool CanPop()
+        {
+            for (int y = 0; y < Height; y++)
+                for (int x = 0; x < Width; x++)
+                    if(Tiles[x,y].GetConnectedTiles().Skip(1).Count() >= 2) return true;
+
+            return false;
+        }
+
+        private async void Pop()
+        {
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width; x++)
+                {
+                    Tile tile = Tiles[x, y];
+
+                    List<Tile> connectedTiles = tile.GetConnectedTiles();
+
+                    if(connectedTiles.Skip(1).Count() < 2) continue;
+
+                    Sequence deflateSequence = DOTween.Sequence();
+
+                    foreach (Tile connectedTile in connectedTiles)
+                        deflateSequence.Join(connectedTile.icon.transform.DOScale(Vector3.zero, tweenDuration));
+
+                    AudioManager.Instance.PlayOneShot(AudioManager.Instance.clearSound);//Plays the clear sound
+
+                    Score.Instance.score += tile.item.value * connectedTiles.Count; //adds pontuation to score
+
+                    await deflateSequence.Play().AsyncWaitForCompletion();
+
+                    Sequence inflateSequence = DOTween.Sequence();
+
+                    foreach (Tile connectedTile in connectedTiles)
+                    {
+                        connectedTile.item = ItemDatabase.Items[Random.Range(0, ItemDatabase.Items.Length)];
+
+                        inflateSequence.Join(connectedTile.icon.transform.DOScale(Vector3.one, tweenDuration));
+                    }
+
+                    await inflateSequence.Play().AsyncWaitForCompletion();
+
+                    //Force to check the board again
+                    x=0;
+                    y=0;
+                }
+            }
+        }
+        /// <summary>
+        /// Used to add a element to the _selection list and trigger the method to play the select sound
+        /// </summary>
+        /// <param name="element"></param>
+        private void AddElementeToSelectionList(Tile element)
+        {
+            _selection.Add(element);
+            AudioManager.Instance.PlayOneShot(AudioManager.Instance.selectSound);//Plays the select sound
         }
     }
 }
